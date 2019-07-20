@@ -14,3 +14,8 @@ gradle/w run --info
 ```
 
 Debug: add `--debug-jvm` flag
+
+
+Example Searches:
+`localhost:8081?q=Leesburg`
+`localhost:8081?relationship.relatedPlace=Leesburg`

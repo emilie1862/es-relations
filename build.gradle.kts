@@ -35,5 +35,6 @@ dependencies {
     compile("ch.qos.logback:logback-classic:1.2.3")
     compile("org.elasticsearch.client:elasticsearch-rest-high-level-client:7.2.0")
     compile("com.fasterxml.jackson.core:jackson-databind:2.9.8")
+    compile("com.fasterxml.jackson.module:jackson-module-kotlin:2.9.7")
     testCompile(group = "junit", name = "junit", version = "4.12")
 }
