@@ -1,20 +1,10 @@
-import com.fasterxml.jackson.annotation.JsonSubTypes
-import com.fasterxml.jackson.annotation.JsonTypeInfo
 import com.fasterxml.jackson.core.JsonGenerator
 import com.fasterxml.jackson.core.JsonProcessingException
 import com.fasterxml.jackson.core.JsonToken
 import com.fasterxml.jackson.databind.*
-import com.fasterxml.jackson.databind.annotation.JsonSerialize
 import com.fasterxml.jackson.databind.jsontype.TypeSerializer
 import com.fasterxml.jackson.module.kotlin.readValue
 import com.fasterxml.jackson.module.kotlin.registerKotlinModule
-import io.ktor.application.*
-import io.ktor.features.*
-import io.ktor.http.*
-import io.ktor.response.*
-import io.ktor.routing.*
-import io.ktor.server.engine.*
-import io.ktor.server.netty.*
 import org.apache.http.HttpHost
 import org.apache.lucene.search.join.ScoreMode
 import org.elasticsearch.action.get.GetRequest
@@ -34,8 +24,6 @@ import org.elasticsearch.common.xcontent.XContentType
 import org.elasticsearch.index.query.QueryBuilders.*
 import org.slf4j.LoggerFactory
 import java.io.IOException
-
-operator fun Regex.contains(text: CharSequence): Boolean = this.matches(text)
 
 //Custom Serializer to pair down the Serialized kNote object when it is used
 //as part of the ObjectKnotes in the Relationship object. The relationships
@@ -65,69 +53,7 @@ class ObjectKnoteSerializer : JsonSerializer<Knote>() {
     }
 }
 
-//Annotations Used to generate the type field for all of the kNote types that extend
-//the abstract Knote class
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME,
-        include = JsonTypeInfo.As.PROPERTY,
-        property = "type")
-@JsonSubTypes(value = [
-    JsonSubTypes.Type(value = Place::class),
-    JsonSubTypes.Type(value = Person::class),
-    JsonSubTypes.Type(value = Event::class)])
-abstract class Knote(val id: String, val name: String) {
-    val relationships: MutableSet<Relationship> = mutableSetOf()
-
-    fun addRelationship(relationship: Relationship) {
-        this.addRelationship(relationship.type, relationship.objectKnotes)
-    }
-
-    fun addRelationship(relationshipType: String, objectKnotes: MutableCollection<Knote>) {
-        val existingRelationship = this.getRelationship(relationshipType)
-
-        //Check to see if the relationship type exists. If it does,
-        //add the new related objectKnotes to that relationship object.
-        //Otherwise add a new Relationship object to the relationships set
-        if(existingRelationship != null) {
-            this.relationships.remove(existingRelationship)
-
-            //Only add the related object kNote if it doesn't already exist in the objectKnotes array
-            objectKnotes.forEach outer@ {newKnote ->
-                existingRelationship.objectKnotes.forEach {existingKnote ->
-                    if(newKnote.id == existingKnote.id) {
-                        return@outer
-                    }
-                }
-
-                existingRelationship.objectKnotes.add(newKnote)
-            }
-
-            this.relationships.add(existingRelationship)
-        } else {
-            this.relationships.add(Relationship(relationshipType, objectKnotes))
-        }
-    }
-
-    private fun getRelationship(relationshipType: String) : Relationship? {
-        relationships.forEach {
-            if(it.type == relationshipType) {
-                return it
-            }
-        }
-
-        return null
-    }
-
-}
-
-class Relationship(val type: String,
-                   @JsonSerialize(contentUsing = ObjectKnoteSerializer::class)
-                   val objectKnotes: MutableCollection<Knote>)
-
-class Place(id: String, name: String) : Knote(id, name)
-class Person(id: String, name: String) : Knote(id, name)
-class Event(id: String, name: String) : Knote(id, name)
-
-val mapper = ObjectMapper().registerKotlinModule()
+internal val mapper = ObjectMapper().registerKotlinModule()
         .configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false)
 
 class ElasticDAO {
@@ -138,8 +64,7 @@ class ElasticDAO {
                         HttpHost("localhost", 9200, "http"),
                         HttpHost("localhost", 9201, "http")))
 
-        private fun createMappingJson() : String {
-            return """
+        val mappingJson = """
             {
                 "properties": {
                     "relationships": {
@@ -153,13 +78,12 @@ class ElasticDAO {
                 }
             }
         """.trimIndent()
-        }
     }
 
     init {
         //Create the knotes index if it doesn't exist
         if(!client.indices().exists(GetIndexRequest("knotes"), RequestOptions.DEFAULT)) {
-            client.indices().create(CreateIndexRequest("knotes").mapping(createMappingJson(), XContentType.JSON), RequestOptions.DEFAULT)
+            client.indices().create(CreateIndexRequest("knotes").mapping(mappingJson, XContentType.JSON), RequestOptions.DEFAULT)
         }
     }
 
@@ -185,15 +109,15 @@ class ElasticDAO {
 
                     val existResponse = client.get(GetRequest("knotes").id(objectKnote.id), RequestOptions.DEFAULT)
 
-                    val relIndexRequest : IndexRequest
-                    if(existResponse.isExists) {
-                        val existingKnote : Knote = mapper.readValue(existResponse.sourceAsBytes)
-                        existingKnote.addRelationship(relationType, mutableListOf(knote))
-                        relIndexRequest = IndexRequest("knotes").id(existingKnote.id).source(mapper.writeValueAsBytes(existingKnote), XContentType.JSON)
-                    } else {
-                        objectKnote.addRelationship(relationType, mutableListOf(knote))
-                        relIndexRequest = IndexRequest("knotes").id(objectKnote.id).source(mapper.writeValueAsBytes(objectKnote), XContentType.JSON)
-                    }
+                    val relIndexRequest : IndexRequest =
+                        if(existResponse.isExists) {
+                            val existingKnote : Knote = mapper.readValue(existResponse.sourceAsBytes)
+                            existingKnote.addRelationship(relationType, mutableListOf(knote))
+                            IndexRequest("knotes").id(existingKnote.id).source(mapper.writeValueAsBytes(existingKnote), XContentType.JSON)
+                        } else {
+                            objectKnote.addRelationship(relationType, mutableListOf(knote))
+                            IndexRequest("knotes").id(objectKnote.id).source(mapper.writeValueAsBytes(objectKnote), XContentType.JSON)
+                        }
 
                     client.index(relIndexRequest, RequestOptions.DEFAULT)
                 } catch(e: Exception) {
@@ -219,10 +143,11 @@ class ElasticDAO {
         return client.index(indexRequest, RequestOptions.DEFAULT)
     }
 
-    fun search(searchParams: Set<Map.Entry<String, List<String>>>) : SearchResponse {
+    fun search(searchParams: Map<String, List<String>>) : SearchResponse {
         val searchRequest = SearchRequest("knotes")
         val searchSourceBuilder = SearchSourceBuilder()
         val relationRegex = Regex("relationship\\.(.+)")
+        val facetRegex = Regex("facet\\.(.+)")
 
         if(searchParams.isEmpty()) {
             searchSourceBuilder.query(matchAllQuery())
@@ -230,22 +155,31 @@ class ElasticDAO {
             val boolQuery = boolQuery()
 
             for((key, value) in searchParams) {
-                when(key) {
-                    "q" -> {
-                        for(vaz in value) {
-                            boolQuery.must(matchQuery("name", vaz))
-                        }
+                if(key == "q") {
+                    for(vaz in value) {
+                        boolQuery.must(matchQuery("name", vaz))
                     }
-                    in relationRegex -> {
-                        val matchResult = relationRegex.find(key)
-                        val relationshipType = matchResult?.groups?.get(1)?.value
+                }
 
-                        for(vaz in value) {
-                            boolQuery.must(nestedQuery("relationships",
-                                    boolQuery().must( matchQuery("relationships.type", relationshipType))
-                                            .must(nestedQuery("relationships.objectKnotes",
-                                                    matchQuery("relationships.objectKnotes.name", vaz), ScoreMode.Avg)), ScoreMode.Avg))
-                        }
+                //Facet by top level fields. i.e. type, binId
+                val matchFacetResult = facetRegex.find(key)
+                if(matchFacetResult != null) {
+                    val facetField = matchFacetResult.groups[1]?.value
+
+                    for(vaz in value) {
+                        boolQuery.must(matchQuery(facetField, vaz))
+                    }
+                }
+
+                val matchResult = relationRegex.find(key)
+                if(matchResult != null) {
+                    val relationshipType = matchResult.groups[1]?.value
+
+                    for(vaz in value) {
+                        boolQuery.must(nestedQuery("relationships",
+                                boolQuery().must( matchQuery("relationships.type", relationshipType))
+                                        .must(nestedQuery("relationships.objectKnotes",
+                                                matchQuery("relationships.objectKnotes.name", vaz), ScoreMode.Avg)), ScoreMode.Avg))
                     }
                 }
             }
@@ -256,43 +190,6 @@ class ElasticDAO {
         searchRequest.source(searchSourceBuilder)
         return client.search(searchRequest, RequestOptions.DEFAULT)
     }
-}
-
-fun loadData(elasticDAO: ElasticDAO) {
-    val person1 = Person("person1", "Emilie")
-    person1.addRelationship("relatedPlace", mutableListOf(Place("place1", "Leesburg")))
-
-    val event1 = Event("event1","Trying out ES")
-    event1.addRelationship("relatedPlace", mutableListOf(Place("place1", "Leesburg")))
-    event1.addRelationship("relatedPerson", mutableListOf(Person("person1", "Emilie")))
-    val event2 = Event("event2","Going to work")
-    event2.addRelationship("relatedPerson", mutableListOf(Person("person2", "Colin"), Person("person1", "Emilie")))
-
-    elasticDAO.index(event1)
-    elasticDAO.index(person1)
-    elasticDAO.index(event2)
-}
-
-fun Application.module() {
-    val elasticDAO = ElasticDAO()
-    loadData(elasticDAO)
-
-    install(DefaultHeaders)
-    install(CallLogging)
-    install(Routing) {
-        get("/") {
-            val queryParameters = call.request.queryParameters.entries()
-            call.respondText(elasticDAO.search(queryParameters).toString(), ContentType.Application.Json)
-        }
-        get("/mapping") {
-            val response = elasticDAO.getIndexMapping()
-            call.respondText(mapper.writeValueAsString(response), ContentType.Application.Json)
-        }
-    }
-}
-
-fun main(args: Array<String>) {
-    embeddedServer(Netty, port = 8081, watchPaths = listOf("TestAppKt"), module = Application::module).start()
 }
 
 //Use Relationship Index for search, make calls to the database to retrieve full objects
