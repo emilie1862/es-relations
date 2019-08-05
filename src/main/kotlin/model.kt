@@ -1,19 +1,46 @@
-import com.fasterxml.jackson.annotation.JsonSubTypes
-import com.fasterxml.jackson.annotation.JsonTypeInfo
-import com.fasterxml.jackson.databind.annotation.JsonSerialize
+import com.google.gson.*
+import com.google.gson.annotations.JsonAdapter
+import java.lang.reflect.Type
 
-//Annotations Used to generate the type field for all of the kNote types that extend
-//the abstract Knote class
-@JsonTypeInfo(use = JsonTypeInfo.Id.NAME,
-        include = JsonTypeInfo.As.PROPERTY,
-        property = "type")
-@JsonSubTypes(value = [
-    JsonSubTypes.Type(value = Place::class),
-    JsonSubTypes.Type(value = Person::class),
-    JsonSubTypes.Type(value = Event::class)])
+//Custom Serializer to pair down the Serialized kNote object when it is used
+//as part of the ObjectKnotes in the Relationship object. The relationships
+//array in a kNote cannot be serialized in that context since it would create a
+//circular dependency
+class ObjectKnoteSerializer : JsonSerializer<List<Knote>>, JsonDeserializer<List<Knote>> {
+
+    override fun serialize(src: List<Knote>?, typeOfSrc: Type?, context: JsonSerializationContext?): JsonElement {
+        val arr = JsonArray()
+
+        src?.forEach {
+            val obj = JsonObject()
+
+            obj.addProperty("id", it.id)
+            obj.addProperty("type", it.type)
+            obj.addProperty("name", it.name)
+
+            arr.add(obj)
+        }
+
+        return arr
+    }
+
+    override fun deserialize(json: JsonElement?, typeOfT: Type?, context: JsonDeserializationContext?): List<Knote> {
+        val list = mutableListOf<Knote>()
+
+        json?.asJsonArray?.forEach {
+            val knote = gson.fromJson(it,
+                    Class.forName(it.asJsonObject.get("type").asString)) as Knote
+            list.add(knote)
+        }
+
+        return list
+    }
+}
+
 abstract class Knote(val id: String, val name: String) {
     val binIds: MutableSet<String> = mutableSetOf()
     val relationships: MutableSet<Relationship> = mutableSetOf()
+    val type: String = this.javaClass.simpleName
 
     fun addBinId(binId: String) {
         binIds.add(binId)
@@ -51,7 +78,7 @@ abstract class Knote(val id: String, val name: String) {
 }
 
 class Relationship(val type: String,
-                   @JsonSerialize(contentUsing = ObjectKnoteSerializer::class)
+                   @JsonAdapter(ObjectKnoteSerializer::class)
                    val objectKnotes: MutableCollection<Knote>)
 
 class Place(id: String, name: String) : Knote(id, name)

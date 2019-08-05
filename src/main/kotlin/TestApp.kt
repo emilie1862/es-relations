@@ -1,10 +1,4 @@
-import com.fasterxml.jackson.core.JsonGenerator
-import com.fasterxml.jackson.core.JsonProcessingException
-import com.fasterxml.jackson.core.JsonToken
-import com.fasterxml.jackson.databind.*
-import com.fasterxml.jackson.databind.jsontype.TypeSerializer
-import com.fasterxml.jackson.module.kotlin.readValue
-import com.fasterxml.jackson.module.kotlin.registerKotlinModule
+import com.google.gson.*
 import org.apache.http.HttpHost
 import org.apache.lucene.search.join.ScoreMode
 import org.elasticsearch.action.get.GetRequest
@@ -23,38 +17,8 @@ import org.elasticsearch.client.indices.GetMappingsResponse
 import org.elasticsearch.common.xcontent.XContentType
 import org.elasticsearch.index.query.QueryBuilders.*
 import org.slf4j.LoggerFactory
-import java.io.IOException
 
-//Custom Serializer to pair down the Serialized kNote object when it is used
-//as part of the ObjectKnotes in the Relationship object. The relationships
-//array in a kNote cannot be serialized in that context since it would create a
-//circular dependency
-class ObjectKnoteSerializer : JsonSerializer<Knote>() {
-
-    @Throws(IOException::class, JsonProcessingException::class)
-    override fun serialize(
-        value: Knote, jgen: JsonGenerator, provider: SerializerProvider) {
-
-        jgen.writeStringField("id", value.id)
-        jgen.writeStringField("name", value.name)
-    }
-
-
-    //Used to generate the type field for all of the kNote types that extend
-    //the abstract Knote class
-    @Throws(IOException::class, JsonProcessingException::class)
-    override fun serializeWithType(value: Knote, gen: JsonGenerator,
-        provider: SerializerProvider, typeSer: TypeSerializer) {
-
-        val typeId = typeSer.typeId(value, JsonToken.START_OBJECT)
-        typeSer.writeTypePrefix(gen, typeId)
-        serialize(value, gen, provider) // call your customized serialize method
-        typeSer.writeTypeSuffix(gen, typeId)
-    }
-}
-
-internal val mapper = ObjectMapper().registerKotlinModule()
-        .configure(SerializationFeature.FAIL_ON_EMPTY_BEANS, false)
+internal val gson = Gson()
 
 class ElasticDAO {
     companion object {
@@ -87,6 +51,10 @@ class ElasticDAO {
         }
     }
 
+    fun destroy() {
+        client.close()
+    }
+
     fun getIndexMapping() : GetMappingsResponse {
         return client.indices().getMapping(GetMappingsRequest().indices("knotes"), RequestOptions.DEFAULT)
     }
@@ -105,18 +73,21 @@ class ElasticDAO {
                     //TODO: Come up with a better way of picking the generated relationship types.
                     //The type of the two related objects probably should be taken into account
                     val relationType = "related${knote::class.simpleName}"
-                    logger.info("Adding relationship \"{}\" [{}] to [{}]", relationType, objectKnote.name, knote.name)
+//                    logger.info("Adding relationship \"{}\" [{}] to [{}]", relationType, objectKnote.name, knote.name)
 
                     val existResponse = client.get(GetRequest("knotes").id(objectKnote.id), RequestOptions.DEFAULT)
 
+                    //Check to see if the object kNote exists. If it does, add a relation to the current kNote
+                    //Otherwise, create an entry in the index for that kNote (with the relation to the current kNote)
                     val relIndexRequest : IndexRequest =
                         if(existResponse.isExists) {
-                            val existingKnote : Knote = mapper.readValue(existResponse.sourceAsBytes)
+                            val existingKnote : Knote = gson.fromJson(existResponse.sourceAsString,
+                                    Class.forName(existResponse.sourceAsMap["type"] as String)) as Knote
                             existingKnote.addRelationship(relationType, mutableListOf(knote))
-                            IndexRequest("knotes").id(existingKnote.id).source(mapper.writeValueAsBytes(existingKnote), XContentType.JSON)
+                            IndexRequest("knotes").id(existingKnote.id).source(gson.toJson(existingKnote), XContentType.JSON)
                         } else {
                             objectKnote.addRelationship(relationType, mutableListOf(knote))
-                            IndexRequest("knotes").id(objectKnote.id).source(mapper.writeValueAsBytes(objectKnote), XContentType.JSON)
+                            IndexRequest("knotes").id(objectKnote.id).source(gson.toJson(objectKnote), XContentType.JSON)
                         }
 
                     client.index(relIndexRequest, RequestOptions.DEFAULT)
@@ -132,14 +103,15 @@ class ElasticDAO {
         //to the kNote being processed before indexing it again.
         val existResponse = client.get(GetRequest("knotes").id(knote.id), RequestOptions.DEFAULT)
         if(existResponse.isExists) {
-            val existingKnote : Knote = mapper.readValue(existResponse.sourceAsBytes)
+            val existingKnote : Knote = gson.fromJson(existResponse.sourceAsString,
+                    Class.forName(existResponse.sourceAsMap["type"] as String)) as Knote
 
             existingKnote.relationships.forEach {
                 knote.addRelationship(it)
             }
         }
 
-        val indexRequest = IndexRequest("knotes").id(knote.id).source(mapper.writeValueAsBytes(knote), XContentType.JSON)
+        val indexRequest = IndexRequest("knotes").id(knote.id).source(gson.toJson(knote), XContentType.JSON)
         return client.index(indexRequest, RequestOptions.DEFAULT)
     }
 
@@ -179,7 +151,11 @@ class ElasticDAO {
                         boolQuery.must(nestedQuery("relationships",
                                 boolQuery().must( matchQuery("relationships.type", relationshipType))
                                         .must(nestedQuery("relationships.objectKnotes",
-                                                matchQuery("relationships.objectKnotes.name", vaz), ScoreMode.Avg)), ScoreMode.Avg))
+                                                boolQuery().should(
+                                                        matchQuery("relationships.objectKnotes.name", vaz)
+                                                ).should(
+                                                        matchQuery("relationships.objectKnotes.id", vaz)
+                                                ), ScoreMode.Avg)), ScoreMode.Avg))
                     }
                 }
             }
@@ -190,6 +166,27 @@ class ElasticDAO {
         searchRequest.source(searchSourceBuilder)
         return client.search(searchRequest, RequestOptions.DEFAULT)
     }
+}
+
+fun loadData(elasticDAO: ElasticDAO) {
+    val person1 = Person("person1", "Emilie")
+    person1.addRelationship("relatedPlace", mutableListOf(Place("place1", "Leesburg")))
+
+    val event1 = Event("event1","Trying out ES")
+    event1.addRelationship("relatedPlace", mutableListOf(Place("place1", "Leesburg")))
+    event1.addRelationship("relatedPerson", mutableListOf(Person("person1", "Emilie")))
+    val event2 = Event("event2","Going to work")
+    event2.addRelationship("relatedPerson", mutableListOf(Person("person2", "Colin"), Person("person1", "Emilie")))
+
+    elasticDAO.index(event1)
+    elasticDAO.index(person1)
+    elasticDAO.index(event2)
+}
+
+fun main(args: Array<String>) {
+    val elasticDAO = ElasticDAO()
+    loadData(elasticDAO)
+    elasticDAO.destroy()
 }
 
 //Use Relationship Index for search, make calls to the database to retrieve full objects
