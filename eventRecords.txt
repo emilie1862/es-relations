@@ -1,0 +1,74 @@
+
+//
+// record(string eventName)
+//
+// report() which returns, for each event, how many times it was recorded in the last 5 minutes
+//
+ */
+
+// map<String, Array<DateTime>
+
+let eventMap = {};
+
+// 5:00 -> 5:05
+// a list of events
+
+// 5:01 -> 5:06
+// a different list of events, but some overlap
+
+// 5:00 -> 5 events of type foo
+
+let timeEventMap = {
+}
+
+let record = function(eventName) {
+
+  let now = new Date();
+  //console.log(now);
+  let thisMinute = now - now.getSeconds() - now.getMilliseconds();
+
+  if(timeEventMap[thisMinute]) {
+    if(timeEventMap[thisMinute][eventName]) {
+      timeEventMap[thisMinute][eventName] += 1;
+    } else {
+      timeEventMap[thisMinute][eventName] = 1;
+    }
+  } else {
+    timeEventMap[thisMinute] = {}
+    timeEventMap[thisMinute][eventName] = 1;
+  }
+}
+
+let report = function() {
+
+  let totalEvents = {};
+  let fiveMinAgo = new Date() - 5*60*1000;
+  console.log(fiveMinAgo);
+  console.log(timeEventMap);
+
+  for(let entry in Object.entries(timeEventMap)) {
+
+    if(parseInt(entry[0]) >= fiveMinAgo) {
+
+      for(let subEntry in Object.entries(entry[1])) {
+
+        if(totalEvents[subEntry[0]]) {
+          totalEvents[subEntry[0]] += subEntry[1];
+        } else {
+          totalEvents[subEntry[0]] = subEntry[1];
+        }
+      }
+    }
+  }
+
+  for(let entry in Object.entries(totalEvents)) {
+    console.log(`EventName: ${entry[0]}, Number of Times: ${entry[1]}`);
+  }
+
+}
+
+
+record("foo");
+record("foo");
+record("bar");
+report();

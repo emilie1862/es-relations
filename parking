@@ -1,0 +1,102 @@
+/*
+A parking-lot has an automated system that records when a car enters the lot and when it leaves it. The record looks like this-
+
+{
+   String plateNumber = “BOND007",
+   String type = “IN” // or “OUT"
+   String date = “12/13/2018"
+}
+
+You have an array of these records logged by the parking-lot. Write a program that finds all the cars that were parked in the lot overnight.
+*/
+
+//overnight = came in one day, left a different day
+//cars came in and out
+
+//Array of records. => map car to list of records. Sort the records by date.
+
+let carMap = {};
+let records;
+
+
+let sortByField = function(field) {
+    return function(a, b) {
+        if(a[field] > b[field]) {
+            return 1;
+        } else {
+            return -1;
+        }
+    }
+}
+
+let createMap = function() {
+    for(let i = 0; i < records.length; ++i) {
+        let plateNumber = records[i].plateNumber;
+        if(carMap[plateNumber]) {
+            carMap[plateNumber].push(records[i])
+        } else {
+            carMap[plateNumber] = [records[i]]
+        }
+    }
+
+    for(let j = 0; j < Object.keys(carMap); ++j) {
+        carMap[j].sort(sortByField("date"))
+    }
+}
+
+let wasParkedOvernight = function(records) {
+    if(!records || !records.length || records.length < 2) {
+        return false;
+    }
+
+    let carInGarageStack = [];
+    let isCarInGarage;
+
+    for(let i = 0; i < records.length - 1; ++i) {
+        let firstRecord = records[i];
+        let secondRecords = records[i + 1];
+
+        if(firstRecord.type == "IN") {
+            carInGarageStack.push(firstRecord)
+        } else {
+            carInGarageStack.pop();
+        }
+
+        //Check if car is in garage
+        if(carInGarageStack.length) {
+            //Car is in carage
+            isCarInGarage = true;
+        } else {
+            isCarInGarage = false;
+        }
+
+        // record1 = IN, 1/1/19
+        // record2 = IN, 1/1/19
+        // record3 = OUT, 1/1/19
+        // record4 = OUT, 1/2/19
+        // firstRecord = IN, 1/1/19
+        // secondRecord = OUT, 1/2/19
+
+        if(firstRecord.date != secondRecord.date && secondRecord.date > firstRecord.date && !isCarInGarage) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+
+let findOvernightCars = function() {
+    createMap();
+    let overnightCars = []
+
+    for(let j = 0; j < Object.keys(carMap); ++j) {
+
+        if(wasParkedOvernight(carMap[j])) {
+            overnightCars.push(carMap[j])
+        }
+    }
+
+    return overnightCars;
+}
+

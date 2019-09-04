@@ -1,0 +1,63 @@
+plugins {
+    id 'base'
+}
+
+//noinspection GroovyAssignabilityCheck
+task distTar(type: Tar) {
+    doFirst { 
+        delete "$buildDir/distributions" 
+        mkdir "$buildDir/distributions"
+    }
+    // Basic configuration
+    baseName = 'iuht'
+    includeEmptyDirs = false
+    duplicatesStrategy = DuplicatesStrategy.FAIL
+
+    // Make sure systemTests pass first.
+
+    // Make sure the :profile and :webservice dockerTar tasks have finished.
+    Task modelDockerTar = tasks.findByPath(':profile:dockerTar')
+    Task webserviceDockerTar = tasks.findByPath(':webservice:dockerTar')
+    dependsOn modelDockerTar
+    dependsOn webserviceDockerTar
+
+    into("iuht-$version") {
+        // Copy python scripts.
+        into('python') {
+            from("$rootDir/python") {
+                include 'iuht/**/*.py', 'Pipfile*', 'setup.py'
+            }
+        }
+        // Copy docker files.
+        into('docker/iuht') {
+            // Copy tar archive from the :profile dockerTar task
+            into('regp') { from rootProject.tarTree(modelDockerTar.outputs.files.singleFile) }
+            // Copy tar archive from the :webservice dockerTar task
+            into('ws') { from rootProject.tarTree(webserviceDockerTar.outputs.files.singleFile) }
+            // Copy yml and other files
+            from('src/main/docker') {
+                include '*.yml'
+                def PATTERN = /^( +image: iuht\/[a-z]+)$/
+                def REPLACE = "\$1:$gitDescribe"
+                filter { line -> (line =~ PATTERN).replaceAll(REPLACE) }
+            }
+            into('mixins') {
+                from "$rootDir/python/mixins"
+            }
+        }
+    }
+}
+
+//noinspection GroovyAssignabilityCheck
+task installDist(type: Copy, dependsOn: distTar) {
+    doFirst { delete "$buildDir/install" }
+
+    from tarTree(distTar.outputs.files.singleFile)
+    into "$buildDir/install"
+
+    doLast {
+        File unpacked = file("$buildDir/install/iuht-$version")
+        unpacked.eachFile { kid -> kid.renameTo("$buildDir/install/$kid.name") }
+        unpacked.delete()
+    }
+}

@@ -1,0 +1,98 @@
+version: '3.4'
+
+services:
+
+  ws:
+
+    build: ./ws
+    image: iuht/ws
+    depends_on: [ regp ]
+
+    environment:
+      - REGISTRY_URL=http://regp:8080
+      - urls.app=https://tours.experiencereality.com/
+      - urls.uiSocket=https://tours.experiencereality.com
+      - cognito.url=https://iuht.auth.us-east-1.amazoncognito.com
+      - cognito.client=2rtg5kso51hn6b8uhf2t6afb51
+      - cognito.secret=k89979eb2tldoici75tvt3lol8ojilddk34vg3paikcpc96dr9h
+      # https://cognito-idp.{region}.amazonaws.com/{userPoolId}/.well-known/jwks.json
+      - cognito.keys=https://cognito-idp.us-east-1.amazonaws.com/us-east-1_c0FXMTDBr/.well-known/jwks.json
+      - s3.bucketName=heritage-images
+
+  # ----------------------------------------------------------------------------
+
+  regp:
+    build: ./regp
+    image: iuht/regp
+
+    depends_on: [ elastic, mongo ]
+    environment:
+      - spring.elasticsearch.rest.uris=http://elastic:9200
+      - spring.data.mongodb.host=mongo
+
+    restart: on-failure:3
+
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080"]
+
+  # ----------------------------------------------------------------------------
+
+  mongo: # a MongoDB to store registry data
+
+    image: mongo:4.0.4 # https://hub.docker.com/r/_/mongo - needs to be the same version used by regp
+    labels:
+      gov.geoplatform.regp: registry
+      gov.geoplatform.regp.mongo.service.location: http://:27017
+
+    # some of the data is stored in the database here
+    volumes: [ 'mongo_data_cfg:/data/configdb', 'mongo_data_db:/data/db' ]
+    # this data is precious (needs to be backed up)
+
+    healthcheck:
+      test: [ 'CMD', 'mongo', 'localhost', '--quiet',
+              '--eval', 'quit( db.runCommand( { ping: 1 } ) ? 0 : 1)' ]
+
+  # ----------------------------------------------------------------------------
+
+  elastic: # an Elasticsearch to index the registry data
+
+    image: docker.elastic.co/elasticsearch/elasticsearch:6.5.4 # needs to be the same version used by regp
+    labels:
+      gov.geoplatform.regp: registry
+      gov.geoplatform.regp.elastic.service.location: http://:9200
+      gov.geoplatform.regp.elastic.cluster.location: http://:9300
+
+    environment:
+    - cluster.name=elasticsearch
+    - client.transport.ignore_cluster_name=true
+    - xpack.security.enabled=false
+    - "ES_JAVA_OPTS=-Xms4g -Xmx4g"
+
+    # the data is indexed into here
+    volumes: [ 'elastic_idx:/usr/share/elasticsearch/data' ]
+    # the index can be rebuilt (so does not need to be backed up)
+
+    healthcheck:
+      test: [ 'CMD', 'bash', '-ec', '
+          health=$$(curl -fsS "http://localhost:9200/_cat/health?h=status")
+          ; echo -n $$health ; [ $$health == green ] || [ $$health == yellow ] || exit 1 ' ]
+
+    # Needed when deploying to RHEL
+    ulimits:
+      nofile: 65536
+
+# ==============================================================================
+
+volumes:
+
+  mongo_data_cfg:
+    labels:
+      gov.geoplatform.regp: registry
+
+  mongo_data_db:
+    labels:
+      gov.geoplatform.regp: registry
+
+  elastic_idx:
+    labels:
+      gov.geoplatform.regp: registry
